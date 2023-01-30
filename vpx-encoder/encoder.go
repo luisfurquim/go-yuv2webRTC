@@ -115,46 +115,43 @@ func (v *VpxEncoder) init() error {
 }
 
 func (v *VpxEncoder) startLooping() {
-	go func() {
-		for {
-			yuv := <-v.Input
-			// Add Image
-			v.vpxCodexIter = nil
-			C.vpx_img_read(&v.vpxImage, unsafe.Pointer(&yuv[0]))
+	for yuv := range v.Input {
+		// Add Image
+		v.vpxCodexIter = nil
+		C.vpx_img_read(&v.vpxImage, unsafe.Pointer(&yuv[0]))
 
-			var flags C.int
-			if v.keyFrameInterval > 0 && v.frameCount%v.keyFrameInterval == 0 {
-				flags |= C.VPX_EFLAG_FORCE_KF
-			}
-			if C.vpx_codec_encode(&v.vpxCodexCtx, &v.vpxImage, C.vpx_codec_pts_t(v.frameCount), 1, C.vpx_enc_frame_flags_t(flags), C.VPX_DL_REALTIME) != 0 {
-				fmt.Println("Failed to encode frame")
-			}
-			v.frameCount++
-
-			// Get Frame
-			for {
-				goBytes := C.get_frame_buffer(&v.vpxCodexCtx, &v.vpxCodexIter)
-				if goBytes.bs == nil {
-					break
-				}
-				bs := C.GoBytes(goBytes.bs, goBytes.size)
-				// if buffer is full skip frame
-				if len(v.Output) >= cap(v.Output) {
-					continue
-				}
-				v.Output <- bs
-			}
+		var flags C.int
+		if v.keyFrameInterval > 0 && v.frameCount%v.keyFrameInterval == 0 {
+			flags |= C.VPX_EFLAG_FORCE_KF
 		}
-	}()
+		if C.vpx_codec_encode(&v.vpxCodexCtx, &v.vpxImage, C.vpx_codec_pts_t(v.frameCount), 1, C.vpx_enc_frame_flags_t(flags), C.VPX_DL_REALTIME) != 0 {
+			fmt.Println("Failed to encode frame")
+		}
+		v.frameCount++
+
+		// Get Frame
+		for {
+			goBytes := C.get_frame_buffer(&v.vpxCodexCtx, &v.vpxCodexIter)
+			if goBytes.bs == nil {
+				break
+			}
+			bs := C.GoBytes(goBytes.bs, goBytes.size)
+			// if buffer is full skip frame
+			if len(v.Output) >= cap(v.Output) {
+				continue
+			}
+			v.Output <- bs
+		}
+	}
+	close(v.Output)
 }
 
 // Release release memory and stop loop
 func (v *VpxEncoder) Release() {
-	v.started = false
 	if v.started {
 		close(v.Input)
-		close(v.Output)
 		C.vpx_img_free(&v.vpxImage)
 		C.vpx_codec_destroy(&v.vpxCodexCtx)
+		v.started = false
 	}
 }
